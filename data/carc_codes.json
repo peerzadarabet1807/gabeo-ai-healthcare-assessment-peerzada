@@ -1,0 +1,165 @@
+{
+  "carc_codes": {
+    "4": {
+      "category": "Coding",
+      "description": "The procedure code is inconsistent with the modifier used, or a required modifier is missing.",
+      "group": "CO",
+      "typically_recoverable": true,
+      "recovery_strategy": "Review modifier requirements for the procedure code and payer contract. Add or correct the modifier and resubmit."
+    },
+    "16": {
+      "category": "Information",
+      "description": "Claim/service lacks information or has submission/billing error(s) which is needed for adjudication.",
+      "group": "CO",
+      "typically_recoverable": true,
+      "recovery_strategy": "Review RARC codes to identify specific missing information. Obtain documentation and resubmit corrected claim."
+    },
+    "18": {
+      "category": "Duplicate",
+      "description": "Exact duplicate claim/service.",
+      "group": "CO",
+      "typically_recoverable": false,
+      "recovery_strategy": "Verify if original claim was paid. If not a true duplicate (different dates, provider, or service detail), appeal with proof of distinction."
+    },
+    "29": {
+      "category": "Timely Filing",
+      "description": "The time limit for filing has expired.",
+      "group": "CO",
+      "typically_recoverable": false,
+      "recovery_strategy": "Verify actual filing date vs service date. Check for delay reason codes, secondary payer situations, or system errors justifying late filing."
+    },
+    "45": {
+      "category": "Contractual",
+      "description": "Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement.",
+      "group": "CO",
+      "typically_recoverable": false,
+      "recovery_strategy": "Contractual write-off per payer contract. Cannot bill patient for the difference."
+    },
+    "50": {
+      "category": "Medical Necessity",
+      "description": "These are non-covered services because this is not deemed a medical necessity by the payer.",
+      "group": "CO",
+      "typically_recoverable": true,
+      "recovery_strategy": "Gather clinical documentation supporting medical necessity. Appeal with physician notes, diagnostic results, and treatment history showing conservative treatment was exhausted."
+    },
+    "96": {
+      "category": "Non-Covered",
+      "description": "Non-covered charge(s). Benefit plan does not cover this service.",
+      "group": "CO",
+      "typically_recoverable": false,
+      "recovery_strategy": "Verify service coverage under patient plan. Bill patient if service is non-covered and advance beneficiary notice was obtained."
+    },
+    "97": {
+      "category": "Bundled",
+      "description": "The benefit for this service is included in the payment/allowance for another service/procedure already adjudicated.",
+      "group": "CO",
+      "typically_recoverable": false,
+      "recovery_strategy": "Review NCCI edits. If services are clinically distinct and separately payable, appeal with documentation proving services were separate and medically necessary."
+    },
+    "197": {
+      "category": "Precertification",
+      "description": "Precertification/authorization/notification absent.",
+      "group": "CO",
+      "typically_recoverable": true,
+      "recovery_strategy": "Contact payer to request retroactive authorization. Submit clinical necessity documentation. Check if emergency exception applies. Reference payer's retroactive auth policy."
+    },
+    "252": {
+      "category": "Attachment Required",
+      "description": "An attachment/other documentation is required to adjudicate this claim/service.",
+      "group": "CO",
+      "typically_recoverable": true,
+      "recovery_strategy": "Submit required attachments (operative report, lab results, physician notes). Ensure documentation supports the level of service billed."
+    }
+  },
+  "rarc_codes": {
+    "N20": {
+      "description": "Missing/incomplete/invalid HCPCS",
+      "category": "Missing Information"
+    },
+    "N30": {
+      "description": "Patient cannot be identified as our insured",
+      "category": "Eligibility"
+    },
+    "N56": {
+      "description": "Procedure code billed is not correct/valid for the service billed or the date of service billed",
+      "category": "Coding"
+    },
+    "N104": {
+      "description": "This claim/service is not payable under our claim jurisdiction area.",
+      "category": "Jurisdiction"
+    },
+    "N115": {
+      "description": "This decision was based on a Local Coverage Determination (LCD).",
+      "category": "Coverage"
+    },
+    "N386": {
+      "description": "This decision was based on a Local Coverage Determination (LCD). An LCD provides a guide to assist in determining whether a particular item or service is covered.",
+      "category": "Coverage"
+    },
+    "MA01": {
+      "description": "If you do not agree with what we approved, you may appeal our decision within 6 months of this notice.",
+      "category": "Appeal Rights"
+    },
+    "MA04": {
+      "description": "Secondary payment cannot be considered without identity of or payment information from the primary payer.",
+      "category": "COB"
+    },
+    "M86": {
+      "description": "Service denied because payment already made for same/similar procedure within set time frame.",
+      "category": "Duplicate"
+    }
+  },
+  "filing_limits_days": {
+    "Medicare": 365,
+    "Medicaid": 365,
+    "CHIP": 365,
+    "Commercial": 180,
+    "default": 180
+  },
+  "appeal_windows_days": {
+    "Medicare": 120,
+    "Medicaid": 90,
+    "Commercial": 180,
+    "default": 60
+  },
+  "delay_reason_codes": {
+    "1": "Proof of Eligibility Unknown or Unavailable",
+    "2": "Litigation",
+    "3": "Authorization Delays",
+    "4": "Delay in Certifying Provider",
+    "5": "Delay in Supplying Billing Forms",
+    "6": "Delay in Delivery of Custom-made Appliances",
+    "7": "Third Party Processing Delay",
+    "8": "Delay in Eligibility Determination",
+    "9": "Original Claim Rejected or Denied Due to Reason Unrelated to Billing Limitation Rules",
+    "10": "Administration Delay in the Prior Approval Process",
+    "11": "Other",
+    "15": "Natural Disaster",
+    "16": "Unavailability of Caseworker"
+  },
+  "procedure_categories": {
+    "99201": "E&M Office Visit",
+    "99202": "E&M Office Visit",
+    "99203": "E&M Office Visit",
+    "99204": "E&M Office Visit",
+    "99205": "E&M Office Visit",
+    "99211": "E&M Office Visit",
+    "99212": "E&M Office Visit",
+    "99213": "E&M Office Visit",
+    "99214": "E&M Office Visit",
+    "99215": "E&M Office Visit",
+    "99231": "E&M Inpatient",
+    "99232": "E&M Inpatient",
+    "99233": "E&M Inpatient",
+    "27447": "Orthopedic Surgery",
+    "29827": "Orthopedic Surgery",
+    "20610": "Orthopedic Injection",
+    "72148": "Radiology MRI",
+    "71046": "Radiology X-Ray",
+    "71250": "Radiology CT",
+    "43239": "GI Endoscopy",
+    "90837": "Mental Health Therapy",
+    "93000": "Cardiology EKG",
+    "S9088": "DME/Other"
+  }
+}
