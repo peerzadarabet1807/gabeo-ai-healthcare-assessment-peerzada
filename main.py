@@ -1,5 +1,3 @@
-"""CLI entry point for the Gabeo AI Claim Denial Analysis System."""
-
 from __future__ import annotations
 
 import json
@@ -31,8 +29,6 @@ def _get_api_key() -> str:
         raise typer.Exit(1)
     return key
 
-
-# ─── Commands ─────────────────────────────────────────────────────────────────
 
 
 @app.command("generate-dataset")
@@ -190,8 +186,6 @@ def cluster_only(
         json.dump(report.model_dump(), f, indent=2, default=str)
     rprint(f"\n[green]✓ Cluster report saved to: {output}[/green]")
 
-
-# ─── Display Helpers ──────────────────────────────────────────────────────────
 
 
 def _display_root_cause(rca):

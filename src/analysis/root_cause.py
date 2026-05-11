@@ -1,5 +1,3 @@
-"""Problem 1: Claim Denial Root Cause Analysis using rule-based pre-analysis + LLM reasoning."""
-
 from __future__ import annotations
 
 import json
@@ -20,10 +18,78 @@ from src.models.analysis import (
 
 
 CARC_CODES_PATH = Path(__file__).parent.parent.parent / "data" / "carc_codes.json"
-PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "root_cause_analysis.txt"
 
 _CARC_CODES: Optional[dict] = None
-_SYSTEM_PROMPT: Optional[str] = None
+
+_SYSTEM_PROMPT = """You are a senior healthcare revenue cycle management (RCM) specialist with 15+ years of experience analyzing insurance claim denials. You have deep expertise in:
+- EDI 835 (remittance advice) and EDI 837 (claim submission) data formats
+- CARC (Claim Adjustment Reason Code) and RARC (Remittance Advice Remark Code) interpretation
+- Payer-specific policies: Medicare (CMS), Medicaid, and major commercial payers (BCBS, Aetna, UHC, Cigna, Humana)
+- Federal timely filing deadlines (Medicare = 365 days, Medicaid = 365 days, Commercial = typically 90-180 days)
+- Prior authorization requirements and retroactive authorization processes
+- Medical necessity criteria for common procedures (E&M, radiology, surgery)
+- NCCI (National Correct Coding Initiative) bundling rules
+- ICD-10 diagnosis codes and CPT/HCPCS procedure codes
+
+CARC REFERENCE (for adjudication context):
+- CARC 4: Modifier inconsistency or missing required modifier → Review CPT/modifier pairing and resubmit
+- CARC 16: Missing/incomplete information → Identify via RARC and resubmit corrected claim
+- CARC 18: Exact duplicate claim → Verify original adjudication; if genuinely different, appeal with proof
+- CARC 29: Timely filing expired → Analyze filing gap vs. payer limit; check for delay reason codes
+- CARC 45: Contractual adjustment → Write-off per contract, cannot bill patient (CO group)
+- CARC 50: Not medically necessary → Gather clinical documentation, appeal with physician attestation
+- CARC 96: Non-covered service → Verify plan coverage; ABN notice may allow patient billing
+- CARC 97: Bundled into another service → Check NCCI edits; separate payability requires modifiers
+- CARC 197: Missing prior authorization → Request retroactive auth; emergency exceptions may apply
+- CARC 252: Attachment required → Submit operative report, clinical notes, or other documentation
+
+RARC REFERENCE:
+- N20: Missing/incomplete HCPCS code
+- N30: Patient identity cannot be confirmed
+- N56: Procedure code invalid for the date of service
+- N115/N386: Denial based on Local Coverage Determination (LCD) — clinical documentation required
+- MA01: Appeal rights notification — 6 months from date of notice
+- MA04: Secondary payment requires primary payer EOB
+- M86: Service already paid or adjusted in prior claim
+
+TIMELY FILING RULES:
+- Medicare (Part A & B): 365 days from date of service
+- Medicaid: 365 days (varies by state; IL Medicaid = 180 days)
+- Commercial payers: typically 90-180 days from date of service (varies by contract)
+- Secondary claims: filing window may start from primary payer's EOB date, not service date
+
+PRIOR AUTH GUIDANCE:
+- High-cost surgeries (knee replacement, shoulder arthroscopy, spinal surgery) almost always require auth
+- Advanced imaging (MRI, CT with contrast) typically requires auth from commercial payers
+- Mental health outpatient usually does not require auth but has session limits
+- Emergency services are generally exempt from prior auth requirements
+
+MEDICAL NECESSITY STANDARDS:
+- MRI for back pain (M54.x) requires documentation of 4-6 weeks conservative treatment failure
+- Inpatient admission must meet InterQual or Milliman criteria for the condition
+- Repeated procedures (injections, therapy) require ongoing documentation of functional improvement
+
+Your task is to analyze a denied healthcare claim and provide a structured, evidence-based assessment.
+
+ANALYSIS METHODOLOGY:
+1. Identify the CARC code and what it means for THIS specific claim (not just the generic definition)
+2. Examine the rule-based pre-analysis findings — these are computed facts about the claim (filing days, auth presence, etc.)
+3. Cross-reference 835 and 837 fields to find inconsistencies or supporting evidence
+4. Determine recoverability based on the specific combination of factors
+5. Assign a confidence score reflecting how certain you are, based on the evidence available
+6. Recommend a specific, actionable next step (not generic advice)
+
+RECOVERABILITY FRAMEWORK:
+- "recoverable": Strong evidence the claim can be re-billed, corrected, or successfully appealed
+- "not_recoverable": The denial is valid and there is no viable appeal pathway
+- "needs_review": Borderline case requiring human review (e.g., partial evidence, conflicting signals)
+
+CONFIDENCE SCORING:
+- 0.9-1.0: All evidence clearly supports the verdict; unambiguous
+- 0.7-0.89: Strong evidence with minor uncertainties
+- 0.5-0.69: Mixed signals; verdict is best estimate but requires verification
+- 0.3-0.49: Significant uncertainty; verdict is tentative
+- Below 0.3: Insufficient evidence to make a reliable determination"""
 
 
 def _load_carc_codes() -> dict:
@@ -32,14 +98,6 @@ def _load_carc_codes() -> dict:
         with open(CARC_CODES_PATH, "r", encoding="utf-8") as f:
             _CARC_CODES = json.load(f)
     return _CARC_CODES
-
-
-def _load_system_prompt() -> str:
-    global _SYSTEM_PROMPT
-    if _SYSTEM_PROMPT is None:
-        with open(PROMPT_PATH, "r", encoding="utf-8") as f:
-            _SYSTEM_PROMPT = f.read()
-    return _SYSTEM_PROMPT
 
 
 def _parse_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -53,10 +111,7 @@ def _parse_date(date_str: Optional[str]) -> Optional[datetime]:
     return None
 
 
-# ─── Rule-Based Pre-Analysis ──────────────────────────────────────────────────
-
 def _preanalyze_carc_29(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Compute actual filing timeline for CARC 29 timely-filing denials."""
     service_date = _parse_date(claim.claim_837.ec_ServiceDateFrom)
     received_date = _parse_date(claim.claim_835.pc_ReceivedDate)
 
@@ -83,7 +138,6 @@ def _preanalyze_carc_29(claim: JoinedClaim, carc_codes: dict) -> dict:
     if is_late and not delay_code:
         notes.append("Filing was genuinely late with no documented delay reason — low recoverability.")
 
-    # Check for secondary payer situation (MAC04 indicates coordination of benefits)
     remark = (claim.claim_835.pcl_RemarkCodes or "").upper()
     if "MA04" in remark:
         notes.append(
@@ -101,7 +155,6 @@ def _preanalyze_carc_29(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _preanalyze_carc_16(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Identify specific missing information for CARC 16 denials using RARC codes."""
     remark_raw = (claim.claim_835.pcl_RemarkCodes or "").strip()
     remark_codes = [r.strip() for r in remark_raw.replace(",", " ").split() if r.strip()]
     rarc_ref = carc_codes.get("rarc_codes", {})
@@ -119,7 +172,6 @@ def _preanalyze_carc_16(claim: JoinedClaim, carc_codes: dict) -> dict:
     if not remark_codes:
         notes.append("No RARC codes present — contact payer to identify the specific missing information.")
 
-    # Check rendering provider NPI
     if not claim.claim_837.ec_RendProvNPI or not claim.claim_837.ec_RendProvNPI.strip():
         notes.append("Rendering provider NPI is missing on the 837 — likely cause of CARC 16.")
 
@@ -131,7 +183,6 @@ def _preanalyze_carc_16(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _preanalyze_carc_50(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Analyze medical necessity denial context."""
     remark_raw = (claim.claim_835.pcl_RemarkCodes or "").strip()
     remark_codes = [r.strip() for r in remark_raw.replace(",", " ").split() if r.strip()]
     lcd_referenced = any(c in remark_codes for c in ("N386", "N115"))
@@ -143,7 +194,6 @@ def _preanalyze_carc_50(claim: JoinedClaim, carc_codes: dict) -> dict:
             "Documentation must meet LCD criteria for this procedure."
         )
 
-    # MRI for back pain without documented conservative treatment
     proc = claim.claim_835.pcl_ProcedureCode or ""
     diag = claim.claim_837.ec_PrincipalDiagnosis or ""
     if proc in ("72148", "72141", "72156") and diag.startswith("M54"):
@@ -170,7 +220,6 @@ def _preanalyze_carc_50(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _preanalyze_carc_197(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Check for prior authorization discrepancy for CARC 197 denials."""
     prior_auth_837 = (claim.claim_837.ec_PriorAuthorization or "").strip()
     prior_auth_835 = (claim.claim_835.pc_PriorAuthNum or "").strip()
     has_auth_837 = bool(prior_auth_837)
@@ -190,7 +239,6 @@ def _preanalyze_carc_197(claim: JoinedClaim, carc_codes: dict) -> dict:
             "(3) verify if this procedure requires auth under the patient's specific plan."
         )
 
-    # High-cost surgeries almost always require auth
     proc = claim.claim_835.pcl_ProcedureCode or ""
     if proc in ("27447", "29827", "23472", "22612"):
         notes.append(
@@ -207,7 +255,6 @@ def _preanalyze_carc_197(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _preanalyze_carc_18(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Identify duplicate claim context."""
     remark_raw = (claim.claim_835.pcl_RemarkCodes or "").strip()
     remark_codes = [r.strip() for r in remark_raw.replace(",", " ").split() if r.strip()]
 
@@ -230,7 +277,6 @@ def _preanalyze_carc_18(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _preanalyze_carc_4(claim: JoinedClaim, carc_codes: dict) -> dict:
-    """Analyze modifier inconsistency for CARC 4 denials."""
     modifier = (claim.claim_835.pcl_ProcedureModifier1 or "").strip()
     proc = claim.claim_835.pcl_ProcedureCode or ""
     notes = []
@@ -254,7 +300,6 @@ def _preanalyze_carc_4(claim: JoinedClaim, carc_codes: dict) -> dict:
 
 
 def _run_pre_analysis(claim: JoinedClaim, carc_codes: dict) -> PreAnalysisFindings:
-    """Route to the appropriate rule-based pre-analyzer based on CARC code."""
     carc = claim.carc_code
     carc_ref = carc_codes["carc_codes"].get(carc, {})
 
@@ -286,8 +331,6 @@ def _run_pre_analysis(claim: JoinedClaim, carc_codes: dict) -> PreAnalysisFindin
 
     return PreAnalysisFindings(**{**base, **extra})
 
-
-# ─── LLM Analysis ─────────────────────────────────────────────────────────────
 
 def _build_tool_definition() -> dict:
     return {
@@ -412,23 +455,19 @@ Pre-Analysis Notes:
 
 
 class RootCauseAnalyzer:
-    """Analyzes denied claims using rule-based pre-analysis + Claude LLM reasoning."""
-
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.client = anthropic.Anthropic(
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
         )
         self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
         self._carc_codes = _load_carc_codes()
-        self._system_prompt = _load_system_prompt()
+        self._system_prompt = _SYSTEM_PROMPT
         self._tool = _build_tool_definition()
 
     def analyze(self, claim: JoinedClaim) -> RootCauseAnalysis:
-        """Run full root cause analysis on a denied claim."""
         pre = _run_pre_analysis(claim, self._carc_codes)
         claim_text = _format_claim_for_prompt(claim, pre)
 
-        # System prompt is cached after first call (prompt caching reduces cost ~75%)
         response = self.client.messages.create(
             model=self.model,
             max_tokens=2048,
@@ -453,7 +492,6 @@ class RootCauseAnalyzer:
             betas=["prompt-caching-2024-07-31"],
         )
 
-        # Extract tool use result
         tool_result = next(
             (b for b in response.content if b.type == "tool_use"), None
         )
@@ -462,11 +500,9 @@ class RootCauseAnalyzer:
 
         result = tool_result.input
 
-        # Parse remark codes from the claim
         remark_raw = (claim.claim_835.pcl_RemarkCodes or "").strip()
         rarc_codes = [r.strip() for r in remark_raw.replace(",", " ").split() if r.strip()]
 
-        # Compute appeal deadline estimate
         appeal_deadline = result.get("appeal_deadline_estimate")
         if not appeal_deadline:
             appeal_windows = self._carc_codes["appeal_windows_days"]
@@ -492,7 +528,6 @@ class RootCauseAnalyzer:
         )
 
     def analyze_batch(self, claims: list[JoinedClaim]) -> list[RootCauseAnalysis]:
-        """Analyze multiple denied claims sequentially (system prompt cached after first call)."""
         results = []
         for claim in claims:
             if not claim.is_denied:

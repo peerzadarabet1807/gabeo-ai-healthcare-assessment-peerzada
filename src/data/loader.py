@@ -1,5 +1,3 @@
-"""Load and join EDI 835 / 837 claim data from JSON files."""
-
 from __future__ import annotations
 
 import json
@@ -10,22 +8,7 @@ from src.models.claim import Claim835, Claim837, JoinedClaim
 
 
 class ClaimLoader:
-    """Loads claims from JSON files and returns typed JoinedClaim objects."""
-
     def load_file(self, path: Union[str, Path]) -> list[JoinedClaim]:
-        """Load all claims from a JSON file.
-
-        Expected file format:
-        {
-          "claims": [
-            {
-              "claim_id": "CLM-xxx",
-              "claim_835": { ... },
-              "claim_837": { ... }
-            }
-          ]
-        }
-        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Claims file not found: {path}")
@@ -37,11 +20,9 @@ class ClaimLoader:
         return [self._parse_claim(c) for c in claims_data]
 
     def load_from_dict(self, data: dict) -> JoinedClaim:
-        """Parse a single claim dict into a JoinedClaim."""
         return self._parse_claim(data)
 
     def load_from_dicts(self, data: list[dict]) -> list[JoinedClaim]:
-        """Parse a list of claim dicts."""
         return [self._parse_claim(c) for c in data]
 
     def _parse_claim(self, raw: dict) -> JoinedClaim:

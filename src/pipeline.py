@@ -1,5 +1,3 @@
-"""Main orchestration pipeline: load claims → root cause → pattern matching → clustering."""
-
 from __future__ import annotations
 
 import json
@@ -22,8 +20,6 @@ from src.analysis.clustering import DenialClusterer
 
 @dataclass
 class PipelineConfig:
-    """Configuration for the analysis pipeline."""
-
     api_key: Optional[str] = None
     model: str = "claude-sonnet-4-6"
     top_k_similar: int = 5
@@ -37,8 +33,6 @@ class PipelineConfig:
 
 @dataclass
 class PipelineResult:
-    """Full pipeline output for a batch of claims."""
-
     all_claims: list[JoinedClaim] = field(default_factory=list)
     denied_claims: list[JoinedClaim] = field(default_factory=list)
     root_cause_analyses: list[RootCauseAnalysis] = field(default_factory=list)
@@ -61,22 +55,6 @@ class PipelineResult:
 
 
 class DenialAnalysisPipeline:
-    """End-to-end pipeline for healthcare claim denial analysis.
-
-    Architecture:
-    1. Load & join EDI 835/837 data  (deterministic)
-    2. Rule-based pre-analysis       (deterministic — grounded facts)
-    3. LLM root cause analysis       (1 API call per denied claim, cached system prompt)
-    4. Feature-based pattern matching (deterministic cosine similarity)
-    5. LLM pattern interpretation    (1 API call per denied claim, cached system prompt)
-    6. Rule + ML clustering          (deterministic KMeans on feature vectors)
-    7. LLM cluster summarization     (1 API call per cluster, cached system prompt)
-
-    Design rationale: LLM is used only where it adds unique value — interpreting ambiguous
-    denial contexts, generating natural language summaries. All factual computations (filing
-    days, similarity scores, clustering) are deterministic, cheap, and explainable.
-    """
-
     def __init__(self, config: Optional[PipelineConfig] = None):
         self.config = config or PipelineConfig()
         api_key = self.config.api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -87,18 +65,15 @@ class DenialAnalysisPipeline:
         self.clusterer = DenialClusterer(api_key=api_key, model=model)
 
     def run_from_file(self, claims_path: str) -> PipelineResult:
-        """Run full pipeline from a JSON claims file."""
         claims = self.loader.load_file(claims_path)
         return self.run(claims)
 
     def run(self, claims: list[JoinedClaim]) -> PipelineResult:
-        """Run full pipeline on a list of JoinedClaim objects."""
         result = PipelineResult(all_claims=claims)
         result.denied_claims = [c for c in claims if c.is_denied]
 
         print(f"[Pipeline] {len(claims)} total claims | {len(result.denied_claims)} denied")
 
-        # Problem 1: Root Cause Analysis
         if not self.config.skip_root_cause and result.denied_claims:
             print(f"[Pipeline] Running root cause analysis on {len(result.denied_claims)} denied claims...")
             result.root_cause_analyses = self.root_cause_analyzer.analyze_batch(
@@ -106,7 +81,6 @@ class DenialAnalysisPipeline:
             )
             print(f"[Pipeline] Root cause analysis complete: {len(result.root_cause_analyses)} analyzed")
 
-        # Problem 2: Pattern Matching
         if not self.config.skip_pattern_matching and result.denied_claims:
             print("[Pipeline] Running pattern matching...")
             matcher = PatternMatcher(historical_claims=claims)
@@ -118,7 +92,6 @@ class DenialAnalysisPipeline:
                     print(f"[WARN] Pattern match failed for {claim.claim_id}: {e}")
             print(f"[Pipeline] Pattern matching complete: {len(result.pattern_match_results)} matched")
 
-        # Problem 3: Clustering & Batch Intelligence
         if not self.config.skip_clustering and result.denied_claims:
             print("[Pipeline] Running clustering and batch intelligence...")
             try:
@@ -137,7 +110,6 @@ class DenialAnalysisPipeline:
         return result
 
     def save_result(self, result: PipelineResult, output_path: Optional[str] = None) -> str:
-        """Save pipeline result to JSON file."""
         if output_path is None:
             Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
             output_path = str(Path(self.config.output_dir) / "pipeline_result.json")

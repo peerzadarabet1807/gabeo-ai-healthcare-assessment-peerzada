@@ -1,11 +1,6 @@
-"""Problem 3: Denial Clustering & Batch Intelligence using KMeans + LLM summaries."""
-
 from __future__ import annotations
 
-import json
 import os
-from collections import Counter
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -20,31 +15,42 @@ from src.models.analysis import (
 )
 from src.analysis.pattern_matching import featurize, _normalize_payer
 
-PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "cluster_summary.txt"
+_CLUSTER_SYSTEM_PROMPT = """You are a healthcare revenue cycle manager briefing a billing director on a batch of claim denials. Your job is to translate technical claim data into clear, actionable business intelligence.
 
-_CLUSTER_SYSTEM_PROMPT: Optional[str] = None
+BILLING TEAM COMMUNICATION PRINCIPLES:
+1. Lead with the dollar amount — billing teams are focused on revenue recovery
+2. Be specific about the action required — avoid generic advice
+3. Quantify the recovery opportunity — "70% appeal success rate" is more useful than "often recoverable"
+4. Identify batch actions — can 20 similar denials be worked with one template letter?
+5. Prioritize by ROI — high value + high success rate = work first
 
+CLUSTER SUMMARY FORMAT:
+"You have [N] claims from [PAYER] denied for [REASON], totaling $[AMOUNT]. Based on [N] similar historical claims, [X]% were successfully recovered after [SPECIFIC ACTION]. Recommended batch action: [WHAT TO DO]."
 
-def _load_cluster_prompt() -> str:
-    global _CLUSTER_SYSTEM_PROMPT
-    if _CLUSTER_SYSTEM_PROMPT is None:
-        with open(PROMPT_PATH, "r", encoding="utf-8") as f:
-            _CLUSTER_SYSTEM_PROMPT = f.read()
-    return _CLUSTER_SYSTEM_PROMPT
+PRIORITY SCORING GUIDANCE:
+Priority = (total_denied_amount × success_rate) / estimated_effort
+- High priority: >$50,000 recoverable with >60% success rate
+- Medium priority: $10,000-$50,000 recoverable OR <60% but specific action clear
+- Low priority: <$10,000 OR <30% success rate OR requires case-by-case review
 
+BATCH ACTION TEMPLATES:
+- CARC 16 (missing info): "Submit corrected claims with [specific field] populated"
+- CARC 29 (timely filing): "Document delay reason codes and submit appeal with timeline justification"
+- CARC 50 (medical necessity): "Prepare template medical necessity letter; have ordering physician sign"
+- CARC 197 (prior auth): "Contact payer's provider relations to request retroactive authorization"
+- CARC 4 (coding error): "Correct modifier and resubmit within [N] days"
+- CARC 18 (duplicate): "Pull original claim EOB to verify; appeal those where original was not paid"
 
-# ─── Rule-Based Clustering ────────────────────────────────────────────────────
+Your task: Given a cluster of denied claims with similar characteristics, produce a concise billing team summary that tells them exactly what they have, what to do about it, and how much they can expect to recover."""
 
 
 def _rule_based_key(claim: JoinedClaim) -> str:
-    """Create a cluster key from (payer, CARC code) — the most actionable grouping."""
     payer = _normalize_payer(claim.payer_name)
     carc = claim.carc_code or "unknown"
     return f"{payer}||{carc}"
 
 
 def _cluster_by_rules(denied_claims: list[JoinedClaim]) -> dict[str, list[JoinedClaim]]:
-    """Group denied claims by (payer, CARC code) combination."""
     clusters: dict[str, list[JoinedClaim]] = {}
     for claim in denied_claims:
         key = _rule_based_key(claim)
@@ -52,31 +58,24 @@ def _cluster_by_rules(denied_claims: list[JoinedClaim]) -> dict[str, list[Joined
     return clusters
 
 
-# ─── ML-Based Clustering (KMeans) ─────────────────────────────────────────────
-
-
 def _kmeans_cluster(
     denied_claims: list[JoinedClaim], n_clusters: int
 ) -> dict[int, list[JoinedClaim]]:
-    """Cluster denied claims using KMeans on feature vectors."""
     if len(denied_claims) <= n_clusters:
         return {i: [c] for i, c in enumerate(denied_claims)}
 
     vectors = np.array([featurize(c) for c in denied_claims], dtype=np.float32)
 
-    # Simple KMeans implementation to avoid sklearn version issues
     np.random.seed(42)
     idx = np.random.choice(len(vectors), n_clusters, replace=False)
     centroids = vectors[idx].copy()
 
-    for _ in range(50):  # max iterations
-        # Assign each claim to nearest centroid
+    for _ in range(50):
         dists = np.array([
             [np.linalg.norm(v - c) for c in centroids] for v in vectors
         ])
         labels = np.argmin(dists, axis=1)
 
-        # Update centroids
         new_centroids = np.array([
             vectors[labels == k].mean(axis=0) if (labels == k).any() else centroids[k]
             for k in range(n_clusters)
@@ -97,10 +96,8 @@ def _merge_clusters(
     ml_clusters: dict[int, list[JoinedClaim]],
     min_cluster_size: int = 2,
 ) -> dict[str, list[JoinedClaim]]:
-    """Prefer rule-based clusters (more actionable) and merge small ones via ML labels."""
     merged: dict[str, list[JoinedClaim]] = {}
 
-    # Keep rule-based clusters that have enough claims
     claim_to_key: dict[str, str] = {}
     for key, claims in rule_clusters.items():
         if len(claims) >= min_cluster_size:
@@ -108,7 +105,6 @@ def _merge_clusters(
             for c in claims:
                 claim_to_key[c.claim_id] = key
 
-    # For singletons, absorb into nearest ML cluster
     singleton_claims = [
         c for c in (
             claim
@@ -128,17 +124,10 @@ def _merge_clusters(
     return merged if merged else {k: v for k, v in rule_clusters.items()}
 
 
-# ─── Cluster Metrics ──────────────────────────────────────────────────────────
-
-
 def _estimate_success_rate(cluster_claims: list[JoinedClaim], all_historical: list[JoinedClaim]) -> float:
-    """Estimate historical appeal success rate based on similar paid claims in dataset."""
     carc = cluster_claims[0].carc_code if cluster_claims else ""
     payer = _normalize_payer(cluster_claims[0].payer_name) if cluster_claims else ""
 
-    # Find historical claims with same payer + same CARC that were eventually paid
-    # In a real system this would use appeal outcome data; here we use paid claims
-    # with same payer as a proxy for "what this payer is willing to pay"
     same_payer_paid = sum(
         1 for c in all_historical
         if not c.is_denied and _normalize_payer(c.payer_name) == payer
@@ -153,28 +142,25 @@ def _estimate_success_rate(cluster_claims: list[JoinedClaim], all_historical: li
     else:
         base_rate = same_payer_paid / same_payer_total
 
-    # Adjust by CARC code recoverability
     carc_adjustments = {
-        "16": 0.20,   # Missing info — almost always recoverable
-        "4": 0.15,    # Coding error — easily corrected
-        "197": 0.10,  # Prior auth — often retroactively approvable
-        "50": 0.00,   # Medical necessity — neutral (documentation dependent)
-        "29": -0.15,  # Timely filing — harder to recover
-        "18": -0.10,  # Duplicate — usually not recoverable
-        "97": -0.20,  # Bundled — usually not recoverable
-        "96": -0.25,  # Non-covered — rarely recoverable
+        "16": 0.20,
+        "4": 0.15,
+        "197": 0.10,
+        "50": 0.00,
+        "29": -0.15,
+        "18": -0.10,
+        "97": -0.20,
+        "96": -0.25,
     }
     adjustment = carc_adjustments.get(carc, 0.0)
     return max(0.05, min(0.95, base_rate + adjustment))
 
 
 def _compute_priority_score(cluster: DenialCluster) -> float:
-    """Priority = recoverable amount × confidence in success, normalized."""
     return cluster.recoverable_amount_estimate * cluster.historical_appeal_success_rate
 
 
 def _label_cluster(claims: list[JoinedClaim]) -> str:
-    """Generate a human-readable cluster label."""
     if not claims:
         return "Unknown Cluster"
     payer = _normalize_payer(claims[0].payer_name)
@@ -201,7 +187,6 @@ def _label_cluster(claims: list[JoinedClaim]) -> str:
 
 
 def _batch_action(carc: str, payer: str, claim_count: int) -> str:
-    """Recommend a batch action for the billing team."""
     actions = {
         "16": (
             f"Prepare corrected claim template for {claim_count} claims. "
@@ -244,9 +229,6 @@ def _batch_action(carc: str, payer: str, claim_count: int) -> str:
     return actions.get(carc, f"Review {claim_count} denied claims and contact {payer} for guidance.")
 
 
-# ─── LLM Cluster Summary ──────────────────────────────────────────────────────
-
-
 def _generate_cluster_summary(
     cluster_label: str,
     claims: list[JoinedClaim],
@@ -257,13 +239,11 @@ def _generate_cluster_summary(
     model: str,
     system_prompt: str,
 ) -> str:
-    """Use Claude to generate a plain-English billing team summary for this cluster."""
     carc = claims[0].carc_code if claims else "unknown"
     payer = _normalize_payer(claims[0].payer_name) if claims else "Unknown"
     total = sum(c.claimed_amount for c in claims)
     proc_codes = list({c.procedure_code for c in claims if c.procedure_code})
 
-    # Build representative analysis summaries
     analysis_snippets = []
     for rca in root_cause_analyses[:3]:
         analysis_snippets.append(
@@ -310,23 +290,13 @@ Be specific, action-oriented, and concise. Max 4 sentences.
     return response.content[0].text.strip()
 
 
-# ─── Clusterer ────────────────────────────────────────────────────────────────
-
-
 class DenialClusterer:
-    """Clusters denied claims into actionable groups and generates batch intelligence reports.
-
-    Approach: Rule-based clustering by (payer, CARC code) as the primary grouping,
-    with ML KMeans as a fallback for singletons. This gives billing teams the most
-    actionable view — they can work ALL claims in a cluster with one batch action.
-    """
-
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.client = anthropic.Anthropic(
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
         )
         self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-        self._system_prompt = _load_cluster_prompt()
+        self._system_prompt = _CLUSTER_SYSTEM_PROMPT
 
     def cluster_and_report(
         self,
@@ -334,28 +304,22 @@ class DenialClusterer:
         root_cause_analyses: Optional[list[RootCauseAnalysis]] = None,
         use_llm_summaries: bool = True,
     ) -> BatchIntelligenceReport:
-        """Run full clustering and generate a batch intelligence report."""
         denied = [c for c in all_claims if c.is_denied]
         if not denied:
             raise ValueError("No denied claims to cluster.")
 
-        # Cluster by rules first
         rule_clusters = _cluster_by_rules(denied)
 
-        # KMeans as fallback for small datasets
         n_ml_clusters = max(2, min(5, len(denied) // 3))
         ml_clusters = _kmeans_cluster(denied, n_clusters=n_ml_clusters)
 
-        # Merge
         merged = _merge_clusters(rule_clusters, ml_clusters)
 
-        # Build RCA lookup
         rca_by_id: dict[str, RootCauseAnalysis] = {}
         if root_cause_analyses:
             for rca in root_cause_analyses:
                 rca_by_id[rca.claim_id] = rca
 
-        # Build DenialCluster objects
         denial_clusters: list[DenialCluster] = []
         for cluster_idx, (key, claims) in enumerate(merged.items()):
             carc = claims[0].carc_code if claims else "unknown"
@@ -368,7 +332,6 @@ class DenialClusterer:
             cluster_rca = [rca_by_id[c.claim_id] for c in claims if c.claim_id in rca_by_id]
             batch_action = _batch_action(carc, payer, len(claims))
 
-            # LLM summary (can be disabled for cost control)
             if use_llm_summaries and self.client:
                 try:
                     summary = _generate_cluster_summary(
@@ -400,22 +363,19 @@ class DenialClusterer:
                 procedure_codes=proc_codes,
                 historical_appeal_success_rate=round(success_rate, 2),
                 recoverable_amount_estimate=recoverable,
-                priority_score=0.0,  # filled below
+                priority_score=0.0,
                 recommended_batch_action=batch_action,
                 billing_team_summary=summary,
             )
-            # Set priority score after cluster is created
             dc.priority_score = round(_compute_priority_score(dc), 2)
             denial_clusters.append(dc)
 
-        # Sort by priority descending
         denial_clusters.sort(key=lambda c: c.priority_score, reverse=True)
 
         total_denied = sum(c.claimed_amount for c in denied)
         total_recoverable = sum(c.recoverable_amount_estimate for c in denial_clusters)
         top_cluster = denial_clusters[0].cluster_id if denial_clusters else ""
 
-        # Executive summary
         quick_wins = [
             f"Priority 1: {denial_clusters[0].cluster_label} — ${denial_clusters[0].recoverable_amount_estimate:,.0f} recoverable"
             if denial_clusters else "",

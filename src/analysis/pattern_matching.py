@@ -1,10 +1,5 @@
-"""Problem 2: Historical Pattern Matching using feature-based cosine similarity."""
-
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -12,12 +7,6 @@ import numpy as np
 from src.models.claim import JoinedClaim
 from src.models.analysis import PatternMatchResult, SimilarClaim
 
-CARC_CODES_PATH = Path(__file__).parent.parent.parent / "data" / "carc_codes.json"
-PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "pattern_matching.txt"
-
-# ─── Feature Engineering ──────────────────────────────────────────────────────
-
-# Known categorical values for one-hot encoding
 _PAYERS = [
     "Medicare Part B", "State Medicaid", "Blue Cross Blue Shield",
     "Aetna", "United Healthcare", "Cigna", "Humana", "Other"
@@ -72,7 +61,6 @@ def _one_hot(value: str, categories: list[str]) -> list[float]:
 
 
 def _amount_bucket(amount: float) -> list[float]:
-    """Encode claim amount into 5 buckets: <500, 500-2k, 2k-10k, 10k-25k, >25k."""
     buckets = [0.0, 0.0, 0.0, 0.0, 0.0]
     if amount < 500:
         buckets[0] = 1.0
@@ -88,22 +76,10 @@ def _amount_bucket(amount: float) -> list[float]:
 
 
 def _diag_prefix(code: str) -> str:
-    """Return first 3 characters of ICD-10 code (category level)."""
     return code[:3] if code and len(code) >= 3 else ""
 
 
 def featurize(claim: JoinedClaim) -> np.ndarray:
-    """Convert a claim into a numerical feature vector for similarity computation.
-
-    Feature dimensions (weighted):
-    - Payer name (8 dims) × weight 2.5 — most predictive for denial behavior
-    - Insurance type (3 dims) × weight 1.0
-    - Procedure group (10 dims) × weight 3.0 — strongest clinical signal
-    - CARC code (11 dims) × weight 1.5 — for denied claims only
-    - Amount bucket (5 dims) × weight 0.5
-    - Procedure code exact match seed (1 dim) × weight 2.0
-    - Diagnosis prefix match seed (1 dim) × weight 1.5
-    """
     payer = _normalize_payer(claim.payer_name)
     proc = claim.procedure_code
     proc_group = _PROCEDURE_TO_GROUP.get(proc, "Other")
@@ -114,32 +90,25 @@ def featurize(claim: JoinedClaim) -> np.ndarray:
     weights = []
     features = []
 
-    # Payer (weight 2.5)
     features.extend(_one_hot(payer, _PAYERS))
     weights.extend([2.5] * len(_PAYERS))
 
-    # Insurance type (weight 1.0)
     features.extend(_one_hot(claim.insurance_type, _INSURANCE_TYPES))
     weights.extend([1.0] * len(_INSURANCE_TYPES))
 
-    # Procedure group (weight 3.0)
     features.extend(_one_hot(proc_group, _PROCEDURE_GROUPS))
     weights.extend([3.0] * len(_PROCEDURE_GROUPS))
 
-    # CARC code (weight 1.5)
     features.extend(_one_hot(carc, _CARC_CODES))
     weights.extend([1.5] * len(_CARC_CODES))
 
-    # Amount bucket (weight 0.5)
     features.extend(_amount_bucket(amount))
     weights.extend([0.5] * 5)
 
-    # Exact procedure code — hash to single float (weight 2.0)
     proc_hash = float(hash(proc) % 1000) / 1000.0
     features.append(proc_hash)
     weights.append(2.0)
 
-    # Diagnosis category prefix — hash to single float (weight 1.5)
     diag_hash = float(hash(diag) % 1000) / 1000.0
     features.append(diag_hash)
     weights.append(1.5)
@@ -158,7 +127,6 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _shared_features(query: JoinedClaim, candidate: JoinedClaim) -> list[str]:
-    """Identify which features drove the similarity score."""
     shared = []
     if _normalize_payer(query.payer_name) == _normalize_payer(candidate.payer_name):
         shared.append(f"Same payer: {query.payer_name}")
@@ -184,20 +152,7 @@ def _shared_features(query: JoinedClaim, candidate: JoinedClaim) -> list[str]:
     return shared
 
 
-# ─── Pattern Matcher ──────────────────────────────────────────────────────────
-
-
 class PatternMatcher:
-    """Finds historically similar claims and detects systemic denial patterns.
-
-    Design decision: We use weighted cosine similarity on interpretable feature vectors
-    rather than neural embeddings. This gives us:
-    - No additional API cost for embeddings
-    - Full interpretability of similarity scores
-    - Ability to explain exactly which features drove similarity
-    - Consistent, deterministic results across runs
-    """
-
     def __init__(self, historical_claims: list[JoinedClaim]):
         self.historical_claims = historical_claims
         self._vectors: dict[str, np.ndarray] = {}
@@ -219,7 +174,6 @@ class PatternMatcher:
         min_similarity: float = 0.4,
         exclude_self: bool = True,
     ) -> tuple[list[SimilarClaim], list[SimilarClaim]]:
-        """Return top-K similar paid and denied claims separately."""
         query_vec = self._get_vector(query)
         scored = []
 
@@ -258,7 +212,6 @@ class PatternMatcher:
     def compute_payer_denial_rate(
         self, payer_name: str, procedure_code: str
     ) -> Optional[float]:
-        """Compute denial rate for a specific payer+procedure combination."""
         matching = [
             c for c in self.historical_claims
             if (
@@ -274,7 +227,6 @@ class PatternMatcher:
     def detect_systemic_pattern(
         self, payer_name: str, procedure_code: str, carc_code: str
     ) -> Optional[str]:
-        """Detect if there is a systemic denial pattern for this payer+procedure+CARC combination."""
         rate = self.compute_payer_denial_rate(payer_name, procedure_code)
         if rate is None:
             return None
@@ -300,7 +252,6 @@ class PatternMatcher:
             )
 
     def match(self, query: JoinedClaim, top_k: int = 5) -> PatternMatchResult:
-        """Run full pattern matching analysis for a denied claim."""
         paid_similar, denied_similar = self.find_similar(query, top_k=top_k)
 
         payer_rate = self.compute_payer_denial_rate(query.payer_name, query.procedure_code)
@@ -308,20 +259,17 @@ class PatternMatcher:
             query.payer_name, query.procedure_code, query.carc_code
         )
 
-        # Determine recoverability adjustment based on historical evidence
         if paid_similar and not denied_similar:
             adjustment = "strengthened"
         elif denied_similar and not paid_similar:
             adjustment = "weakened"
         elif paid_similar and denied_similar:
-            # Compare average similarity scores
             avg_paid = sum(c.similarity_score for c in paid_similar) / len(paid_similar)
             avg_denied = sum(c.similarity_score for c in denied_similar) / len(denied_similar)
             adjustment = "strengthened" if avg_paid > avg_denied else "weakened"
         else:
             adjustment = "neutral"
 
-        # Build pattern summary
         top_paid_id = paid_similar[0].claim_id if paid_similar else None
         summary_parts = []
         if paid_similar:

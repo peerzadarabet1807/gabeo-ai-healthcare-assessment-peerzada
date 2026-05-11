@@ -1,5 +1,3 @@
-"""Pydantic models for EDI 835 (remittance) and EDI 837 (claim submission) data."""
-
 from __future__ import annotations
 
 from typing import Optional
@@ -7,9 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class Claim835(BaseModel):
-    """EDI 835 Remittance Advice — the payer's response to a submitted claim."""
-
-    # Payment-level fields (cp_ prefix) — top-level remittance info
+    # Payment level
     cp_PayerName: Optional[str] = None
     cp_PayerID: Optional[str] = None
     cp_PayeeName: Optional[str] = None
@@ -19,11 +15,9 @@ class Claim835(BaseModel):
     cp_TotalClaimChargeAmount: Optional[float] = None
     cp_EffectiveDate: Optional[str] = None
 
-    # Claim-level fields (pc_ prefix) — per-claim adjudication details
+    # Claim level
     pc_ClaimID: str
-    pc_ClaimStatus: str = Field(
-        description="1=Primary, 2=Secondary, 4=Denied, 19=Primary+Forwarded, 22=Reversal"
-    )
+    pc_ClaimStatus: str  # 1=Primary, 4=Denied, 22=Reversal
     pc_ClaimAmount: float
     pc_ClaimPaid: float
     pc_PatientResponsibility: Optional[float] = None
@@ -36,7 +30,7 @@ class Claim835(BaseModel):
     pc_PatientFirst: Optional[str] = None
     pc_RenderingID: Optional[str] = None
 
-    # Line-level fields (pcl_ prefix) — individual service line details
+    # Line level
     pcl_ProcedureCode: Optional[str] = None
     pcl_ProcedureModifier1: Optional[str] = None
     pcl_ProcedureModifier2: Optional[str] = None
@@ -48,15 +42,9 @@ class Claim835(BaseModel):
     pcl_ServiceDate: Optional[str] = None
     pcl_RemarkCodes: Optional[str] = None
 
-    # Adjustment fields (pcla_ prefix) — reason codes for payment adjustments
-    pcla_AdjustmentGroup: Optional[str] = Field(
-        default=None,
-        description="CO=Contractual, PR=Patient Responsibility, OA=Other, PI=Payer Initiated"
-    )
-    pcla_AdjustmentReason: Optional[str] = Field(
-        default=None,
-        description="CARC code explaining WHY the adjustment was made"
-    )
+    # Adjustment level
+    pcla_AdjustmentGroup: Optional[str] = None  # CO, PR, OA, PI
+    pcla_AdjustmentReason: Optional[str] = None  # CARC code
     pcla_AdjustmentAmount: Optional[float] = None
     pcla_AdjustmentQty: Optional[float] = None
 
@@ -70,21 +58,14 @@ class Claim835(BaseModel):
 
 
 class Claim837(BaseModel):
-    """EDI 837 Claim Submission — what the provider originally billed."""
-
-    # Claim-level fields (ec_ prefix)
+    # Claim level
     ec_ClaimNo: str
     ec_Amount: Optional[float] = None
-    ec_PlaceOfService: Optional[str] = Field(
-        default=None,
-        description="11=Office, 21=Inpatient Hospital, 22=Outpatient Hospital, 23=ER"
-    )
+    ec_PlaceOfService: Optional[str] = None
     ec_PayerName: Optional[str] = None
     ec_PayerID: Optional[str] = None
     ec_InsuranceType: Optional[str] = None
-    ec_PrincipalDiagnosis: Optional[str] = Field(
-        default=None, description="Primary ICD-10 diagnosis code"
-    )
+    ec_PrincipalDiagnosis: Optional[str] = None
     ec_Diag2: Optional[str] = None
     ec_Diag3: Optional[str] = None
     ec_Diag4: Optional[str] = None
@@ -96,26 +77,14 @@ class Claim837(BaseModel):
     ec_ServiceDateTo: Optional[str] = None
     ec_PriorAuthorization: Optional[str] = None
     ec_TypeOfBill: Optional[str] = None
-    ec_ClaimFrequency: Optional[str] = Field(
-        default=None, description="1=Original, 7=Replacement, 8=Void"
-    )
-    ec_DelayReasonCode: Optional[str] = Field(
-        default=None,
-        description="Reason code explaining why claim was submitted late"
-    )
+    ec_ClaimFrequency: Optional[str] = None  # 1=Original, 7=Replacement, 8=Void
+    ec_DelayReasonCode: Optional[str] = None
     ec_PatientRelationship: Optional[str] = None
     ec_SubscriberID: Optional[str] = None
 
     @property
     def all_diagnoses(self) -> list[str]:
-        """Return all non-empty diagnosis codes."""
-        codes = [
-            self.ec_PrincipalDiagnosis,
-            self.ec_Diag2,
-            self.ec_Diag3,
-            self.ec_Diag4,
-            self.ec_Diag5,
-        ]
+        codes = [self.ec_PrincipalDiagnosis, self.ec_Diag2, self.ec_Diag3, self.ec_Diag4, self.ec_Diag5]
         return [c for c in codes if c and c.strip()]
 
     @property
@@ -124,12 +93,12 @@ class Claim837(BaseModel):
 
 
 class JoinedClaim(BaseModel):
-    """Combined 835 + 837 data — full picture of what was billed and how it was adjudicated."""
+    """Combined 835 + 837 for a single claim."""
 
     claim_id: str
     claim_835: Claim835
     claim_837: Claim837
-    label: Optional[str] = None  # human-readable scenario label for synthetic data
+    label: Optional[str] = None
 
     @property
     def is_denied(self) -> bool:
@@ -137,19 +106,11 @@ class JoinedClaim(BaseModel):
 
     @property
     def payer_name(self) -> str:
-        return (
-            self.claim_835.cp_PayerName
-            or self.claim_837.ec_PayerName
-            or "Unknown Payer"
-        )
+        return self.claim_835.cp_PayerName or self.claim_837.ec_PayerName or "Unknown"
 
     @property
     def insurance_type(self) -> str:
-        return (
-            self.claim_835.pc_InsuranceType
-            or self.claim_837.ec_InsuranceType
-            or "Unknown"
-        )
+        return self.claim_835.pc_InsuranceType or self.claim_837.ec_InsuranceType or "Unknown"
 
     @property
     def procedure_code(self) -> str:
